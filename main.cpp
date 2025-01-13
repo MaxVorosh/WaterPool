@@ -98,7 +98,7 @@ vec3 reflect(vec3 direction) {
 
 float specular(vec3 direction) {
     vec3 view_direction = normalize(camera_position - position);
-    vec3 reflected = reflect(view_direction);
+    vec3 reflected = reflect(direction);
     float power = 1 / (roughness * roughness) - 1;
     return glossiness * pow(max(0.0, dot(reflected, view_direction)), power);
 }
@@ -108,7 +108,7 @@ void main()
     vec3 albedo = texture(tex, texcoord).xyz;
     vec3 color = albedo * ambient_light;
     float sun_impact = diffuse(sun_direction) + specular(sun_direction);
-    color += sun_impact * sun_light;
+    color += albedo * sun_impact * sun_light;
     out_color = vec4(color, 1.0);
 }
 )";
@@ -173,7 +173,7 @@ int main() try
     SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
 
-    SDL_Window * window = SDL_CreateWindow("Graphics course HW 3",
+    SDL_Window * window = SDL_CreateWindow("Water pool",
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
         800, 600,
@@ -221,9 +221,9 @@ int main() try
     const float floor_width = 40;
     const float floor_height = 8;
     glm::vec3 floor_normal = {0, 1, 0};
-    std::vector<Vertex> floor_data = {{{0, 0, 0}, floor_normal, {0, 0}}, {{0, 0, floor_height}, floor_normal, {0, floor_height}},
-                                        {{floor_width, 0, 0}, floor_normal, {floor_width, 0}}, {{floor_width, 0, 0}, floor_normal, {floor_width, 0}}, 
-                                        {{0, 0, floor_height}, floor_normal, {0, floor_height}}, {{floor_width, 0, floor_height}, floor_normal, {floor_width, floor_height}}};
+    std::vector<Vertex> floor_data = {{{0, 0, 0}, floor_normal, {0, 0}}, {{0, 0, floor_height}, floor_normal, {0, floor_height / 4.0}},
+                                        {{floor_width, 0, 0}, floor_normal, {floor_width / 4.0, 0}}, {{floor_width, 0, 0}, floor_normal, {floor_width / 4.0, 0}}, 
+                                        {{0, 0, floor_height}, floor_normal, {0, floor_height / 4.0}}, {{floor_width, 0, floor_height}, floor_normal, {floor_width / 4.0, floor_height / 4.0}}};
 
     glGenBuffers(1, &floor_vbo);
     glBindBuffer(GL_ARRAY_BUFFER, floor_vbo);
@@ -303,13 +303,13 @@ int main() try
             time += dt;
         }
         if (button_down[SDLK_w])
-            camera_position += 2 * dt * camera_front;
+            camera_position += 4 * dt * camera_front;
         if (button_down[SDLK_s])
-            camera_position -= 2 * dt * camera_front;
+            camera_position -= 4 * dt * camera_front;
         if (button_down[SDLK_a])
-            camera_position -= 2 * dt * glm::normalize(glm::cross(camera_front, camera_up));
+            camera_position -= 4 * dt * glm::normalize(glm::cross(camera_front, camera_up));
         if (button_down[SDLK_d])
-            camera_position += 2 * dt * glm::normalize(glm::cross(camera_front, camera_up));
+            camera_position += 4 * dt * glm::normalize(glm::cross(camera_front, camera_up));
 
         if (button_down[SDLK_LEFT])
             camera_rotation -= 2.f * dt;
@@ -343,8 +343,8 @@ int main() try
 
         glm::mat4 projection = glm::perspective(glm::pi<float>() / 2.f, (1.f * width) / height, near, far);
 
-        glm::vec3 light_direction = glm::normalize(glm::vec3(0.5, 1.f, 0.5));
-        glm::vec3 sun_color = glm::vec3(1.0, 0.9, 0.8) * glm::vec3(0.3);
+        glm::vec3 light_direction = glm::normalize(glm::vec3(0.9, 1.f, -0.2));
+        glm::vec3 sun_color = glm::vec3(1.0, 0.9, 0.8);
 
         // Floor
         glm::mat4 debug_matrix = model;
