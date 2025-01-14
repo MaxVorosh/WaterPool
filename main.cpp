@@ -114,6 +114,40 @@ void main()
 )";
 
 
+const char env_vertex_shader_source[] =
+R"(#version 330 core
+
+layout (location = 0) in vec3 in_position;
+
+uniform mat4 model;
+uniform mat4 view;
+
+out vec3 position;
+
+void main()
+{
+    gl_Position = view * model * vec4(in_position, 1.0);
+    gl_Position.z = gl_Position.w;
+    position = in_position;
+}
+)";
+
+const char env_fragment_shader_source[] =
+R"(#version 330 core
+
+uniform samplerCube tex;
+
+in vec3 position;
+
+layout (location = 0) out vec4 out_color;
+
+void main()
+{
+    vec3 color = texture(tex, 2 * position + 0.5).rgb;
+    out_color = vec4(color, 1.0);
+}
+)";
+
 GLuint create_shader(GLenum type, const char * source)
 {
     GLuint result = glCreateShader(type);
@@ -195,6 +229,14 @@ int main() try
     if (!GLEW_VERSION_3_3)
         throw std::runtime_error("OpenGL 3.3 is not supported");
 
+    auto env_vertex_shader = create_shader(GL_VERTEX_SHADER, env_vertex_shader_source);
+    auto env_fragment_shader = create_shader(GL_FRAGMENT_SHADER, env_fragment_shader_source);
+    auto env_program = create_program(env_vertex_shader, env_fragment_shader);
+
+    GLuint env_texture_location = glGetUniformLocation(env_program, "tex");
+    GLuint env_model_location = glGetUniformLocation(env_program, "model");
+    GLuint env_view_location = glGetUniformLocation(env_program, "view");
+
     auto floor_vertex_shader = create_shader(GL_VERTEX_SHADER, floor_vertex_shader_source);
     auto floor_fragment_shader = create_shader(GL_FRAGMENT_SHADER, floor_fragment_shader_source);
     auto floor_program = create_program(floor_vertex_shader, floor_fragment_shader);
@@ -245,6 +287,45 @@ int main() try
     int x, y, n;
     unsigned char* pixels_data = stbi_load(floor_texture_path.c_str(), &x, &y, &n, 4);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, x, y, 0, GL_RGBA, GL_UNSIGNED_BYTE, (void*)pixels_data);
+    stbi_image_free(pixels_data);
+
+    GLuint env_vao, env_vbo;
+    glGenVertexArrays(1, &env_vao);
+    glBindVertexArray(env_vao);
+
+    std::vector<glm::vec3> env_data = {{-1, -1, 1}, {1, -1, 1}, {-1, 1, 1}, {1, -1, 1}, {1, 1, 1}, {-1, 1, 1},
+                                         {-1, -1, -1}, {-1, -1, 1}, {-1, 1, -1}, {-1, -1, 1}, {-1, 1, 1}, {-1, 1, -1},
+                                         {-1, -1, -1}, {-1, 1, -1}, {1, -1, -1}, {1, -1, -1}, {-1, 1, -1}, {1, 1, -1},
+                                         {1, -1, -1}, {1, 1, -1}, {1, -1, 1}, {1, -1, 1}, {1, 1, -1}, {1, 1, 1},
+                                         {-1, -1, -1}, {1, -1, -1}, {-1, -1, 1}, {1, -1, -1}, {1, -1, 1}, {-1, -1, 1},
+                                         {-1, 1, -1}, {-1, 1, 1}, {1, 1, -1}, {1, 1, -1}, {-1, 1, 1}, {1, 1, 1}
+                                      };
+    for (int i = 0; i < env_data.size(); ++i) {
+        env_data[i] *= glm::vec3(2);
+    }
+    glGenBuffers(1, &env_vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, env_vbo);
+    glBufferData(GL_ARRAY_BUFFER, env_data.size() * sizeof(glm::vec3), env_data.data(), GL_STATIC_DRAW);
+
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(glm::vec3), (void*)(0));
+
+    GLuint env_tex;
+    glGenTextures(1, &env_tex);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, env_tex);
+    const std::string env_path = project_root + "/environment/";
+    std::string env_names[6] = {"posx.jpg", "negx.jpg", "posy.jpg", "negy.jpg", "posz.jpg", "negz.jpg"};
+    for (int i = 0; i < 6; ++i) {
+        unsigned char* env_data = stbi_load((env_path + env_names[i]).c_str(), &x, &y, &n, 4);
+        glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGBA8, x, y, 0, GL_RGBA, GL_UNSIGNED_BYTE, (void*)env_data);
+        stbi_image_free(env_data);
+    }
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE); 
 
     auto last_frame_start = std::chrono::high_resolution_clock::now();
 
@@ -303,13 +384,17 @@ int main() try
             time += dt;
         }
         if (button_down[SDLK_w])
-            camera_position += 4 * dt * camera_front;
+            camera_position += 6 * dt * camera_front;
         if (button_down[SDLK_s])
-            camera_position -= 4 * dt * camera_front;
+            camera_position -= 6 * dt * camera_front;
         if (button_down[SDLK_a])
-            camera_position -= 4 * dt * glm::normalize(glm::cross(camera_front, camera_up));
+            camera_position -= 6 * dt * glm::normalize(glm::cross(camera_front, camera_up));
         if (button_down[SDLK_d])
-            camera_position += 4 * dt * glm::normalize(glm::cross(camera_front, camera_up));
+            camera_position += 6 * dt * glm::normalize(glm::cross(camera_front, camera_up));
+        if (button_down[SDLK_LCTRL])
+            camera_position -= 6 * dt * camera_up;
+        if (button_down[SDLK_SPACE])
+            camera_position += 6 * dt * camera_up;
 
         if (button_down[SDLK_LEFT])
             camera_rotation -= 2.f * dt;
@@ -324,12 +409,11 @@ int main() try
         glClearColor(0.8, 0.8, 1.f, 0.f);
         glViewport(0, 0, width, height);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-        glEnable(GL_DEPTH_TEST);
         glEnable(GL_CULL_FACE);
 
         float near = 0.01f;
         float far = 100.0;
+        float aspect_ratio = width / float(height);
 
         glm::mat4 model = glm::mat4(1.f);
 
@@ -346,8 +430,24 @@ int main() try
         glm::vec3 light_direction = glm::normalize(glm::vec3(0.9, 1.f, -0.2));
         glm::vec3 sun_color = glm::vec3(1.0, 0.9, 0.8);
 
+        // Environment
+        glUseProgram(env_program);
+        glDisable(GL_DEPTH_TEST);
+        glUniform1i(env_texture_location, 1);
+        glUniformMatrix4fv(env_model_location, 1, GL_FALSE, reinterpret_cast<float *>(&model));
+        glm::mat4 env_view = glm::mat4(glm::mat3(view));
+        glUniformMatrix4fv(env_view_location, 1, GL_FALSE, reinterpret_cast<float *>(&env_view));
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, env_tex);
+        glBindVertexArray(env_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, env_vbo);
+
+        glDrawArrays(GL_TRIANGLES, 0, 36);
+
         // Floor
-        glm::mat4 debug_matrix = model;
+        glUseProgram(floor_program);
+        glEnable(GL_DEPTH_TEST);
+
         glUniformMatrix4fv(floor_model_location, 1, GL_FALSE, reinterpret_cast<float *>(&model));
         glUniformMatrix4fv(floor_projection_location, 1, GL_FALSE, reinterpret_cast<float *>(&projection));
         glUniformMatrix4fv(floor_view_location, 1, GL_FALSE, reinterpret_cast<float *>(&view));
@@ -361,6 +461,7 @@ int main() try
 
         glBindVertexArray(floor_vao);
         glBindBuffer(GL_ARRAY_BUFFER, floor_vbo);
+        glActiveTexture(GL_TEXTURE0);
 
         glDrawArrays(GL_TRIANGLES, 0, 6);
 
