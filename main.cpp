@@ -148,6 +148,86 @@ void main()
 }
 )";
 
+const char water_vertex_shader_source[] =
+R"(#version 330 core
+
+uniform mat4 model;
+uniform mat4 view;
+uniform mat4 projection;
+uniform float time;
+
+layout (location = 0) in vec2 in_position;
+
+out vec3 position;
+out vec3 normal;
+
+float get_height() {
+    float base_height = 10;
+    float add = 0.5 * sin(in_position.x + time) + 0.2 * cos(in_position.y + 3 * time);
+    return base_height + add;
+}
+
+float dhdx() {
+    return 0.5 * cos(in_position.x + time);
+}
+
+float dhdy() {
+    return -0.2 * sin(in_position.y + 3 * time);
+}
+
+void main()
+{
+    position = vec3(in_position.x, get_height(), in_position.y);
+    gl_Position = projection * view * model * vec4(position, 1.0);
+    position = (model * vec4(position, 1.0)).xyz;
+    normal = normalize(vec3(-dhdx(), 1.0, -dhdy()));
+}
+)";
+
+const char water_fragment_shader_source[] =
+R"(#version 330 core
+
+uniform vec3 camera_position;
+uniform vec3 ambient_light;
+
+uniform vec3 sun_light;
+uniform vec3 sun_direction;
+
+uniform float glossiness;
+uniform float roughness;
+
+
+in vec3 position;
+in vec3 normal;
+
+layout (location = 0) out vec4 out_color;
+
+float diffuse(vec3 direction) {
+    return max(0.0, dot(normalize(normal), direction));
+}
+
+vec3 reflect(vec3 direction) {
+    float cosine = dot(normalize(normal), direction);
+    return 2.0 * normalize(normal) * cosine - direction;
+}
+
+float specular(vec3 direction) {
+    vec3 view_direction = normalize(camera_position - position);
+    vec3 reflected = reflect(direction);
+    float power = 1 / (roughness * roughness) - 1;
+    return glossiness * pow(max(0.0, dot(reflected, view_direction)), power);
+}
+
+void main()
+{
+    vec3 albedo = vec3(0.1, 0.4, 0.8);
+    vec3 color = albedo * ambient_light;
+    float sun_impact = diffuse(sun_direction) + specular(sun_direction);
+    color += albedo * sun_impact * sun_light;
+    out_color = vec4(color, 1.0);
+}
+)";
+
 GLuint create_shader(GLenum type, const char * source)
 {
     GLuint result = glCreateShader(type);
@@ -193,6 +273,11 @@ struct Vertex {
     glm::vec2 texcoord;
 };
 
+glm::vec2 get_water_position(int i, int j, float floor_width, float floor_height, int width_water_cnt, int height_water_cnt) {
+    // std::cout << floor_width / float(width_water_cnt) * i << ' ' << floor_height / float(height_water_cnt) * j << std::endl;
+    return {floor_width / float(width_water_cnt) * i, floor_height / float(height_water_cnt) * j};
+}
+
 int main() try
 {
     if (SDL_Init(SDL_INIT_VIDEO) != 0)
@@ -228,6 +313,21 @@ int main() try
 
     if (!GLEW_VERSION_3_3)
         throw std::runtime_error("OpenGL 3.3 is not supported");
+
+    auto water_vertex_shader = create_shader(GL_VERTEX_SHADER, water_vertex_shader_source);
+    auto water_fragment_shader = create_shader(GL_FRAGMENT_SHADER, water_fragment_shader_source);
+    auto water_program = create_program(water_vertex_shader, water_fragment_shader);
+
+    GLuint water_model_location = glGetUniformLocation(water_program, "model");
+    GLuint water_view_location = glGetUniformLocation(water_program, "view");
+    GLuint water_projection_location = glGetUniformLocation(water_program, "projection");
+    GLuint water_camera_position_location = glGetUniformLocation(water_program, "camera_position");
+    GLuint water_sun_direction_location = glGetUniformLocation(water_program, "sun_direction");
+    GLuint water_sun_color_location = glGetUniformLocation(water_program, "sun_light");
+    GLuint water_ambient_color_location = glGetUniformLocation(water_program, "ambient_light");
+    GLuint water_glossiness_location = glGetUniformLocation(water_program, "glossiness");
+    GLuint water_roughness_location = glGetUniformLocation(water_program, "roughness");
+    GLuint water_time_location = glGetUniformLocation(water_program, "time");
 
     auto env_vertex_shader = create_shader(GL_VERTEX_SHADER, env_vertex_shader_source);
     auto env_fragment_shader = create_shader(GL_FRAGMENT_SHADER, env_fragment_shader_source);
@@ -277,6 +377,31 @@ int main() try
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)(12));
     glEnableVertexAttribArray(2);
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)(24));
+
+    GLuint water_vao, water_vbo;
+    glGenVertexArrays(1, &water_vao);
+    glBindVertexArray(water_vao);
+
+    const int width_water_cnt = 500;
+    const int height_water_cnt = 100;
+    std::vector<glm::vec2> water_points;
+    for (int i = 0; i < width_water_cnt; ++i) {
+        for (int j = 0; j < height_water_cnt; ++j) {
+            water_points.push_back(get_water_position(i, j, floor_width, floor_height, width_water_cnt, height_water_cnt));
+            water_points.push_back(get_water_position(i, j + 1, floor_width, floor_height, width_water_cnt, height_water_cnt));
+            water_points.push_back(get_water_position(i + 1, j, floor_width, floor_height, width_water_cnt, height_water_cnt));
+            water_points.push_back(get_water_position(i + 1, j, floor_width, floor_height, width_water_cnt, height_water_cnt));
+            water_points.push_back(get_water_position(i, j + 1, floor_width, floor_height, width_water_cnt, height_water_cnt));
+            water_points.push_back(get_water_position(i + 1, j + 1, floor_width, floor_height, width_water_cnt, height_water_cnt));
+        }
+    }
+
+    glGenBuffers(1, &water_vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, water_vbo);
+    glBufferData(GL_ARRAY_BUFFER, water_points.size() * sizeof(glm::vec2), water_points.data(), GL_STATIC_DRAW);
+
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(glm::vec2), (void*)(0));
 
     GLuint tex;
     glGenTextures(1, &tex);
@@ -339,7 +464,7 @@ int main() try
     float camera_rotation = 0.f;
     float camera_height = 1.f;
 
-    glm::vec3 camera_position = glm::vec3(floor_width / 2.0, 10.f, 20.f);
+    glm::vec3 camera_position = glm::vec3(floor_width / 2.0, 20.f, 20.f);
     glm::vec3 camera_front = glm::vec3(0.f, 0.f, -1.f);
     glm::vec3 base_camera_front = glm::vec3(0.f, 0.f, -1.f);
     glm::vec3 camera_up = glm::vec3(0.f, 1.f, 0.f);
@@ -365,7 +490,7 @@ int main() try
             break;
         case SDL_KEYDOWN:
             button_down[event.key.keysym.sym] = true;
-            if (event.key.keysym.sym == SDLK_SPACE)
+            if (event.key.keysym.sym == SDLK_p)
                 paused = !paused;
             break;
         case SDL_KEYUP:
@@ -435,7 +560,14 @@ int main() try
         glDisable(GL_DEPTH_TEST);
         glUniform1i(env_texture_location, 1);
         glUniformMatrix4fv(env_model_location, 1, GL_FALSE, reinterpret_cast<float *>(&model));
-        glm::mat4 env_view = glm::mat4(glm::mat3(view));
+        
+        glm::mat4 env_rotation_matrix(1.f);
+        env_rotation_matrix = glm::rotate(env_rotation_matrix, -view_angle, {1.f, 0.f, 0.f});
+        env_rotation_matrix = glm::rotate(env_rotation_matrix, -camera_rotation, {0.f, 1.f, 0.f});
+        glm::vec3 env_camera_front = base_camera_front * glm::mat3(env_rotation_matrix);
+        glm::mat4 env_view(1.f);
+        env_view = glm::lookAt(glm::vec3(0), env_camera_front, camera_up);
+        
         glUniformMatrix4fv(env_view_location, 1, GL_FALSE, reinterpret_cast<float *>(&env_view));
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_CUBE_MAP, env_tex);
@@ -464,6 +596,26 @@ int main() try
         glActiveTexture(GL_TEXTURE0);
 
         glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        // Water
+        glUseProgram(water_program);
+        glEnable(GL_DEPTH_TEST);
+
+        glUniformMatrix4fv(water_model_location, 1, GL_FALSE, reinterpret_cast<float *>(&model));
+        glUniformMatrix4fv(water_projection_location, 1, GL_FALSE, reinterpret_cast<float *>(&projection));
+        glUniformMatrix4fv(water_view_location, 1, GL_FALSE, reinterpret_cast<float *>(&view));
+        glUniform3fv(water_sun_direction_location, 1, reinterpret_cast<float *>(&light_direction));
+        glUniform3fv(water_camera_position_location, 1, reinterpret_cast<float *>(&camera_position));
+        glUniform1f(water_time_location, time);
+        glUniform3f(water_ambient_color_location, 0.2, 0.2, 0.2);
+        glUniform3f(water_sun_color_location, sun_color.x, sun_color.y, sun_color.z);
+        glUniform1f(water_glossiness_location, 3.0);
+        glUniform1f(water_roughness_location, 0.05);
+
+        glBindVertexArray(water_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, water_vbo);
+
+        glDrawArrays(GL_TRIANGLES, 0, water_points.size());
 
         SDL_GL_SwapWindow(window);
     }
