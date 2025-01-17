@@ -197,6 +197,10 @@ uniform float glossiness;
 uniform float roughness;
 
 uniform samplerCube tex;
+uniform sampler2D floor_tex;
+
+uniform float floor_width;
+uniform float floor_height;
 
 in vec3 position;
 in vec3 normal;
@@ -204,29 +208,55 @@ in vec3 normal;
 layout (location = 0) out vec4 out_color;
 
 float diffuse(vec3 direction) {
-    return max(0.0, dot(normalize(normal), direction));
+    return max(0.0, dot(vec3(0.0, 1.0, 0.0), direction));
 }
 
 vec3 reflect(vec3 direction) {
-    float cosine = dot(normalize(normal), direction);
-    return 2.0 * normalize(normal) * cosine - direction;
+    float cosine = dot(normal, direction);
+    return 2.0 * normal * cosine - direction;
 }
 
-float specular(vec3 direction) {
-    vec3 view_direction = normalize(camera_position - position);
-    vec3 reflected = reflect(direction);
-    float power = 1 / (roughness * roughness) - 1;
-    return glossiness * pow(max(0.0, dot(reflected, view_direction)), power);
+vec3 get_floor(vec3 pos) {
+    vec3 albedo = texture(floor_tex, vec2(pos.x / 4.0, pos.z / 4.0)).xyz;
+    vec3 color = albedo * ambient_light;
+    float sun_impact = diffuse(sun_direction);
+    color += albedo * sun_impact * sun_light;
+    return color;
+}
+
+vec3 get_refract(vec3 direction, float n1, float n2) {
+    float cosine = dot(normalize(normal), direction);
+    float sine = sqrt(1 - cosine * cosine);
+    float refract_sine = n1 * sine / n2;
+    float refract_cosine = sqrt(1 - refract_sine * refract_sine);
+    float h = position.y;
+    float straight_floor_x = -direction.x * h / direction.y + position.x;
+    float straight_floor_z = -direction.z * h / direction.y + position.z;
+    vec3 projection_position = vec3(position.x, 0.0, position.y);
+    vec3 straight_projection = vec3(straight_floor_x, 0.0, straight_floor_z) - projection_position;
+    vec3 refracted_projection = straight_projection * n1 / n2 * cosine / refract_cosine;
+    vec3 refracted_position = projection_position + refracted_projection;
+    if (refracted_position.x > 0 && refracted_position.z > 0 && refracted_position.x < floor_width && refracted_position.z < floor_height) {
+        return get_floor(refracted_position);
+    }
+    vec3 refracted_ray = normalize(refracted_position - position);
+    return texture(tex, refracted_ray).rgb;
 }
 
 void main()
 {
     vec3 view_direction = normalize(camera_position - position);
-    vec3 albedo = 0.3 * vec3(0.1, 0.4, 0.8) + 0.7 * texture(tex, reflect(view_direction)).rgb;
-    vec3 color = albedo * ambient_light;
-    float sun_impact = diffuse(sun_direction) + specular(sun_direction);
-    color += albedo * sun_impact * sun_light;
+    float n1 = 1.0;
+    float n2 = 1.333;
+    float cosine = dot(normalize(normal), sun_direction);
+    float coef = (n1 - n2) / (n1 + n2);
+    coef = coef * coef;
+    coef = coef + (1 - coef) * pow(1 - cosine, 5);
+    vec3 reflect_color = coef * texture(tex, reflect(view_direction)).rgb;
+    vec3 refract_color = (1 - coef) * get_refract(view_direction, n1, n2);
+    vec3 color = reflect_color + refract_color;
     out_color = vec4(color, 1.0);
+    // out_color = vec4(vec3(1 - cosine), 1.0);
 }
 )";
 
@@ -331,6 +361,9 @@ int main() try
     GLuint water_roughness_location = glGetUniformLocation(water_program, "roughness");
     GLuint water_time_location = glGetUniformLocation(water_program, "time");
     GLuint water_env_texture_location = glGetUniformLocation(water_program, "tex");
+    GLuint water_floor_texture_location = glGetUniformLocation(water_program, "floor_tex");
+    GLuint water_floor_width_location = glGetUniformLocation(water_program, "floor_width");
+    GLuint water_floor_height_location = glGetUniformLocation(water_program, "floor_height");
 
     auto env_vertex_shader = create_shader(GL_VERTEX_SHADER, env_vertex_shader_source);
     auto env_fragment_shader = create_shader(GL_FRAGMENT_SHADER, env_fragment_shader_source);
@@ -591,8 +624,8 @@ int main() try
         glUniform1i(floor_texture_location, 0);
         glUniform3f(floor_ambient_color_location, 0.2, 0.2, 0.2);
         glUniform3f(floor_sun_color_location, sun_color.x, sun_color.y, sun_color.z);
-        glUniform1f(floor_glossiness_location, 6.0);
-        glUniform1f(floor_roughness_location, 0.01);
+        glUniform1f(floor_glossiness_location, 3.0);
+        glUniform1f(floor_roughness_location, 0.05);
 
         glBindVertexArray(floor_vao);
         glBindBuffer(GL_ARRAY_BUFFER, floor_vbo);
@@ -615,9 +648,14 @@ int main() try
         glUniform1f(water_glossiness_location, 3.0);
         glUniform1f(water_roughness_location, 0.05);
         glUniform1i(water_env_texture_location, 1);
+        glUniform1i(water_floor_texture_location, 0);
+        glUniform1f(water_floor_width_location, floor_width);
+        glUniform1f(water_floor_height_location, floor_height);
 
         glBindVertexArray(water_vao);
         glBindBuffer(GL_ARRAY_BUFFER, water_vbo);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, tex);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_CUBE_MAP, env_tex);
 
