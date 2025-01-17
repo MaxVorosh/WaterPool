@@ -143,7 +143,7 @@ layout (location = 0) out vec4 out_color;
 
 void main()
 {
-    vec3 color = texture(tex, 2 * position + 0.5).rgb;
+    vec3 color = texture(tex, position).rgb;
     out_color = vec4(color, 1.0);
 }
 )";
@@ -196,6 +196,7 @@ uniform vec3 sun_direction;
 uniform float glossiness;
 uniform float roughness;
 
+uniform samplerCube tex;
 
 in vec3 position;
 in vec3 normal;
@@ -220,7 +221,8 @@ float specular(vec3 direction) {
 
 void main()
 {
-    vec3 albedo = vec3(0.1, 0.4, 0.8);
+    vec3 view_direction = normalize(camera_position - position);
+    vec3 albedo = 0.3 * vec3(0.1, 0.4, 0.8) + 0.7 * texture(tex, reflect(view_direction)).rgb;
     vec3 color = albedo * ambient_light;
     float sun_impact = diffuse(sun_direction) + specular(sun_direction);
     color += albedo * sun_impact * sun_light;
@@ -328,6 +330,7 @@ int main() try
     GLuint water_glossiness_location = glGetUniformLocation(water_program, "glossiness");
     GLuint water_roughness_location = glGetUniformLocation(water_program, "roughness");
     GLuint water_time_location = glGetUniformLocation(water_program, "time");
+    GLuint water_env_texture_location = glGetUniformLocation(water_program, "tex");
 
     auto env_vertex_shader = create_shader(GL_VERTEX_SHADER, env_vertex_shader_source);
     auto env_fragment_shader = create_shader(GL_FRAGMENT_SHADER, env_fragment_shader_source);
@@ -588,8 +591,8 @@ int main() try
         glUniform1i(floor_texture_location, 0);
         glUniform3f(floor_ambient_color_location, 0.2, 0.2, 0.2);
         glUniform3f(floor_sun_color_location, sun_color.x, sun_color.y, sun_color.z);
-        glUniform1f(floor_glossiness_location, 3.0);
-        glUniform1f(floor_roughness_location, 0.05);
+        glUniform1f(floor_glossiness_location, 6.0);
+        glUniform1f(floor_roughness_location, 0.01);
 
         glBindVertexArray(floor_vao);
         glBindBuffer(GL_ARRAY_BUFFER, floor_vbo);
@@ -611,9 +614,12 @@ int main() try
         glUniform3f(water_sun_color_location, sun_color.x, sun_color.y, sun_color.z);
         glUniform1f(water_glossiness_location, 3.0);
         glUniform1f(water_roughness_location, 0.05);
+        glUniform1i(water_env_texture_location, 1);
 
         glBindVertexArray(water_vao);
         glBindBuffer(GL_ARRAY_BUFFER, water_vbo);
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, env_tex);
 
         glDrawArrays(GL_TRIANGLES, 0, water_points.size());
 
