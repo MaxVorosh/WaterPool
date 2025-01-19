@@ -202,6 +202,7 @@ uniform float roughness;
 
 uniform samplerCube tex;
 uniform sampler2D floor_tex;
+uniform sampler2D caustics_tex;
 
 uniform float floor_width;
 uniform float floor_height;
@@ -220,8 +221,10 @@ vec3 reflect(vec3 direction) {
     return 2.0 * normal * cosine - direction;
 }
 
-vec3 get_floor(vec3 pos) {
+vec3 get_floor(vec3 pos) { 
+    vec4 caustics_data = texture(caustics_tex, vec2(pos.x / 40.0, pos.z / 8.0));
     vec3 albedo = texture(floor_tex, vec2(pos.x / 4.0, pos.z / 4.0)).xyz;
+    albedo += caustics_data.w * caustics_data.xyz;
     vec3 color = albedo * ambient_light;
     float sun_impact = diffuse(sun_direction);
     color += albedo * sun_impact * sun_light;
@@ -448,6 +451,7 @@ int main() try
     GLuint water_roughness_location = glGetUniformLocation(water_program, "roughness");
     GLuint water_time_location = glGetUniformLocation(water_program, "time");
     GLuint water_env_texture_location = glGetUniformLocation(water_program, "tex");
+    GLuint water_caustics_texture_location = glGetUniformLocation(water_program, "caustics_tex");
     GLuint water_floor_texture_location = glGetUniformLocation(water_program, "floor_tex");
     GLuint water_floor_width_location = glGetUniformLocation(water_program, "floor_width");
     GLuint water_floor_height_location = glGetUniformLocation(water_program, "floor_height");
@@ -784,6 +788,7 @@ int main() try
         glUniform1f(water_roughness_location, 0.05);
         glUniform1i(water_env_texture_location, 1);
         glUniform1i(water_floor_texture_location, 0);
+        glUniform1i(water_caustics_texture_location, 2);
         glUniform1f(water_floor_width_location, floor_width);
         glUniform1f(water_floor_height_location, floor_height);
 
@@ -793,6 +798,8 @@ int main() try
         glBindTexture(GL_TEXTURE_2D, tex);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_CUBE_MAP, env_tex);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, caustics_tex);
 
         glDrawArrays(GL_TRIANGLES, 0, water_points.size());
 
