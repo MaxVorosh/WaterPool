@@ -167,16 +167,16 @@ out vec3 normal;
 
 float get_height() {
     float base_height = 5;
-    float add = 0.5 * sin(in_position.x + time) + 0.2 * cos(in_position.y + 3 * time);
+    float add = 0.5 * sin(in_position.x + time) + 0.2 * cos(in_position.y + 3 * time) + 0.1 * sin(in_position.x + 2 * in_position.y + time);
     return base_height + add;
 }
 
 float dhdx() {
-    return 0.5 * cos(in_position.x + time);
+    return 0.5 * cos(in_position.x + time) + 0.1 * cos(in_position.x + 2 * in_position.y + time);
 }
 
 float dhdy() {
-    return -0.2 * sin(in_position.y + 3 * time);
+    return -0.2 * sin(in_position.y + 3 * time) + 0.2 * cos(in_position.x + 2 * in_position.y + time);
 }
 
 void main()
@@ -275,16 +275,16 @@ layout (location = 0) in vec2 in_position;
 
 float get_height() {
     float base_height = 5;
-    float add = 0.5 * sin(in_position.x + time) + 0.2 * cos(in_position.y + 3 * time);
+    float add = 0.5 * sin(in_position.x + time) + 0.2 * cos(in_position.y + 3 * time) + 0.1 * sin(in_position.x + 2 * in_position.y + time);
     return base_height + add;
 }
 
 float dhdx() {
-    return 0.5 * cos(in_position.x + time);
+    return 0.5 * cos(in_position.x + time) + 0.1 * cos(in_position.x + 2 * in_position.y + time);
 }
 
 float dhdy() {
-    return -0.2 * sin(in_position.y + 3 * time);
+    return -0.2 * sin(in_position.y + 3 * time) + 0.2 * cos(in_position.x + 2 * in_position.y + time);
 }
 
 vec3 get_refract(vec3 direction, float n1, float n2, vec3 normal, vec3 position) {
@@ -595,11 +595,6 @@ int main() try
         std::cout << "Incomplete buffer" << std::endl;
     }
 
-    // glGenRenderbuffers(1, &caustics_rbf);
-    // glBindRenderbuffer(GL_RENDERBUFFER, caustics_rbf);
-    // glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, caustics_resolution, caustics_resolution); 
-    // glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, caustics_rbf);
-
     auto last_frame_start = std::chrono::high_resolution_clock::now();
 
     float time = 0.f;
@@ -612,7 +607,7 @@ int main() try
     float camera_rotation = 0.f;
     float camera_height = 1.f;
 
-    glm::vec3 camera_position = glm::vec3(floor_width / 2.0, 20.f, 20.f);
+    glm::vec3 camera_position = glm::vec3(floor_width / 2.0, 10.f, 20.f);
     glm::vec3 camera_front = glm::vec3(0.f, 0.f, -1.f);
     glm::vec3 base_camera_front = glm::vec3(0.f, 0.f, -1.f);
     glm::vec3 camera_up = glm::vec3(0.f, 1.f, 0.f);
