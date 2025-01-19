@@ -80,6 +80,7 @@ uniform float glossiness;
 uniform float roughness;
 
 uniform sampler2D tex;
+uniform sampler2D caustics_tex;
 
 in vec3 position;
 in vec3 normal;
@@ -105,7 +106,10 @@ float specular(vec3 direction) {
 
 void main()
 {
-    vec3 albedo = texture(tex, texcoord).xyz;
+    vec2 caustics_texcoord = vec2(position.x / 40.0, position.z / 8.0);
+    vec4 caustics_data = texture(caustics_tex, caustics_texcoord);
+    vec3 albedo = texture(tex, texcoord).xyz + caustics_data.w * caustics_data.xyz;
+    // albedo = caustics_data.xyz;
     vec3 color = albedo * ambient_light;
     float sun_impact = diffuse(sun_direction) + specular(sun_direction);
     color += albedo * sun_impact * sun_light;
@@ -162,17 +166,17 @@ out vec3 position;
 out vec3 normal;
 
 float get_height() {
-    float base_height = 10;
-    float add = 0.5 * sin(in_position.x + time) + 0.2 * cos(in_position.y + 3 * time);
+    float base_height = 5;
+    float add = 0.5 * sin(in_position.x + time) + 0.2 * cos(in_position.y + 3 * time) + 0.1 * sin(in_position.x + 2 * in_position.y + time);
     return base_height + add;
 }
 
 float dhdx() {
-    return 0.5 * cos(in_position.x + time);
+    return 0.5 * cos(in_position.x + time) + 0.1 * cos(in_position.x + 2 * in_position.y + time);
 }
 
 float dhdy() {
-    return -0.2 * sin(in_position.y + 3 * time);
+    return -0.2 * sin(in_position.y + 3 * time) + 0.2 * cos(in_position.x + 2 * in_position.y + time);
 }
 
 void main()
@@ -198,6 +202,7 @@ uniform float roughness;
 
 uniform samplerCube tex;
 uniform sampler2D floor_tex;
+uniform sampler2D caustics_tex;
 
 uniform float floor_width;
 uniform float floor_height;
@@ -216,8 +221,10 @@ vec3 reflect(vec3 direction) {
     return 2.0 * normal * cosine - direction;
 }
 
-vec3 get_floor(vec3 pos) {
+vec3 get_floor(vec3 pos) { 
+    vec4 caustics_data = texture(caustics_tex, vec2(pos.x / 40.0, pos.z / 8.0));
     vec3 albedo = texture(floor_tex, vec2(pos.x / 4.0, pos.z / 4.0)).xyz;
+    albedo += caustics_data.w * caustics_data.xyz;
     vec3 color = albedo * ambient_light;
     float sun_impact = diffuse(sun_direction);
     color += albedo * sun_impact * sun_light;
@@ -259,6 +266,80 @@ void main()
     // out_color = vec4(vec3(1 - cosine), 1.0);
 }
 )";
+
+const char caustic_vertex_shader_source[] =
+R"(#version 330 core
+
+uniform mat4 model;
+uniform float time;
+uniform vec3 sun_direction;
+
+layout (location = 0) in vec2 in_position;
+
+float get_height() {
+    float base_height = 5;
+    float add = 0.5 * sin(in_position.x + time) + 0.2 * cos(in_position.y + 3 * time) + 0.1 * sin(in_position.x + 2 * in_position.y + time);
+    return base_height + add;
+}
+
+float dhdx() {
+    return 0.5 * cos(in_position.x + time) + 0.1 * cos(in_position.x + 2 * in_position.y + time);
+}
+
+float dhdy() {
+    return -0.2 * sin(in_position.y + 3 * time) + 0.2 * cos(in_position.x + 2 * in_position.y + time);
+}
+
+vec3 get_refract(vec3 direction, float n1, float n2, vec3 normal, vec3 position) {
+    float cosine = dot(normalize(normal), direction);
+    float sine = sqrt(1 - cosine * cosine);
+    float refract_sine = n1 * sine / n2;
+    float refract_cosine = sqrt(1 - refract_sine * refract_sine);
+    float h = position.y;
+    float straight_floor_x = -direction.x * h / direction.y + position.x;
+    float straight_floor_z = -direction.z * h / direction.y + position.z;
+    vec3 projection_position = vec3(position.x, 0.0, position.y);
+    vec3 straight_projection = vec3(straight_floor_x, 0.0, straight_floor_z) - projection_position;
+    vec3 refracted_projection = straight_projection * n1 / n2 * cosine / refract_cosine;
+    vec3 refracted_position = projection_position + refracted_projection;
+    return refracted_position;
+}
+
+void main()
+{
+    vec3 position = vec3(in_position.x, get_height(), in_position.y);
+    position = (model * vec4(position, 1.0)).xyz;
+    vec3 normal = normalize(vec3(-dhdx(), 1.0, -dhdy()));
+    vec2 texcoord = get_refract(sun_direction, 1.0, 1.33, normal, position).xz;
+    texcoord.x /= 40.0;
+    texcoord.y /= 8.0;
+    gl_Position = vec4(texcoord * 2.0 - 1.0, 0.0, 1.0);
+}
+)";
+
+const char caustic_fragment_shader_source[] =
+R"(#version 330 core
+
+uniform vec3 sun_light;
+uniform vec3 sun_direction;
+
+in vec3 normal;
+
+layout (location = 0) out vec4 out_color;
+
+void main()
+{
+    float n1 = 1.0;
+    float n2 = 1.333;
+    float cosine = dot(normalize(normal), sun_direction);
+    float coef = (n1 - n2) / (n1 + n2);
+    coef = coef * coef;
+    coef = coef + (1 - coef) * pow(1 - cosine, 5);
+    vec3 color = (1 - coef) * sun_light;
+    out_color = vec4(sun_light, 1.0 - coef);
+}
+)";
+
 
 GLuint create_shader(GLenum type, const char * source)
 {
@@ -346,6 +427,15 @@ int main() try
     if (!GLEW_VERSION_3_3)
         throw std::runtime_error("OpenGL 3.3 is not supported");
 
+    auto caustics_vertex_shader = create_shader(GL_VERTEX_SHADER, caustic_vertex_shader_source);
+    auto caustics_fragment_shader = create_shader(GL_FRAGMENT_SHADER, caustic_fragment_shader_source);
+    auto caustics_program = create_program(caustics_vertex_shader, caustics_fragment_shader);
+
+    GLuint caustics_model_location = glGetUniformLocation(caustics_program, "model");
+    GLuint caustics_time_location = glGetUniformLocation(caustics_program, "time");
+    GLuint caustics_sun_direction_location = glGetUniformLocation(caustics_program, "sun_direction");
+    GLuint caustics_sun_color_location = glGetUniformLocation(caustics_program, "sun_light");
+
     auto water_vertex_shader = create_shader(GL_VERTEX_SHADER, water_vertex_shader_source);
     auto water_fragment_shader = create_shader(GL_FRAGMENT_SHADER, water_fragment_shader_source);
     auto water_program = create_program(water_vertex_shader, water_fragment_shader);
@@ -361,6 +451,7 @@ int main() try
     GLuint water_roughness_location = glGetUniformLocation(water_program, "roughness");
     GLuint water_time_location = glGetUniformLocation(water_program, "time");
     GLuint water_env_texture_location = glGetUniformLocation(water_program, "tex");
+    GLuint water_caustics_texture_location = glGetUniformLocation(water_program, "caustics_tex");
     GLuint water_floor_texture_location = glGetUniformLocation(water_program, "floor_tex");
     GLuint water_floor_width_location = glGetUniformLocation(water_program, "floor_width");
     GLuint water_floor_height_location = glGetUniformLocation(water_program, "floor_height");
@@ -387,6 +478,7 @@ int main() try
     GLuint floor_glossiness_location = glGetUniformLocation(floor_program, "glossiness");
     GLuint floor_roughness_location = glGetUniformLocation(floor_program, "roughness");
     GLuint floor_texture_location = glGetUniformLocation(floor_program, "tex");
+    GLuint floor_caustics_texture_location = glGetUniformLocation(floor_program, "caustics_tex");
     glUseProgram(floor_program);
 
     const std::string project_root = PROJECT_ROOT;
@@ -488,6 +580,25 @@ int main() try
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE); 
 
+
+    const int caustics_resolution = 512;
+    GLuint caustics_tex, caustics_fbo, caustics_rbf;
+    glGenTextures(1, &caustics_tex);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, caustics_tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, caustics_resolution, caustics_resolution, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glGenFramebuffers(1, &caustics_fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, caustics_fbo);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, caustics_tex, 0);
+    if (glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+        std::cout << "Incomplete buffer" << std::endl;
+    }
+
     auto last_frame_start = std::chrono::high_resolution_clock::now();
 
     float time = 0.f;
@@ -500,7 +611,7 @@ int main() try
     float camera_rotation = 0.f;
     float camera_height = 1.f;
 
-    glm::vec3 camera_position = glm::vec3(floor_width / 2.0, 20.f, 20.f);
+    glm::vec3 camera_position = glm::vec3(floor_width / 2.0, 10.f, 20.f);
     glm::vec3 camera_front = glm::vec3(0.f, 0.f, -1.f);
     glm::vec3 base_camera_front = glm::vec3(0.f, 0.f, -1.f);
     glm::vec3 camera_up = glm::vec3(0.f, 1.f, 0.f);
@@ -567,10 +678,6 @@ int main() try
         if (button_down[SDLK_DOWN])
             view_angle += 2.f * dt;
 
-        glClearColor(0.8, 0.8, 1.f, 0.f);
-        glViewport(0, 0, width, height);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glEnable(GL_CULL_FACE);
 
         float near = 0.01f;
         float far = 100.0;
@@ -591,9 +698,37 @@ int main() try
         glm::vec3 light_direction = glm::normalize(glm::vec3(0.9, 1.f, -0.2));
         glm::vec3 sun_color = glm::vec3(1.0, 0.9, 0.8);
 
+        // Caustics
+
+        glUseProgram(caustics_program);
+
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, caustics_fbo);
+        glClearColor(0.f, 0.f, 0.f, 0.f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glViewport(0, 0, caustics_resolution, caustics_resolution);
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+
+        glUniformMatrix4fv(caustics_model_location, 1, GL_FALSE, reinterpret_cast<float *>(&model));
+        glUniform1f(caustics_time_location, time);
+        glUniform3fv(caustics_sun_direction_location, 1, reinterpret_cast<float *>(&light_direction));
+        glUniform3f(caustics_sun_color_location, sun_color.x, sun_color.y, sun_color.z);
+
+        glBindVertexArray(water_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, water_vbo);
+
+        glDrawArrays(GL_TRIANGLES, 0, water_points.size());
+
         // Environment
         glUseProgram(env_program);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        glClearColor(0.8, 0.8, 1.f, 0.f);
+        glViewport(0, 0, width, height);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glEnable(GL_CULL_FACE);
         glDisable(GL_DEPTH_TEST);
+        glDisable(GL_BLEND);
         glUniform1i(env_texture_location, 1);
         glUniformMatrix4fv(env_model_location, 1, GL_FALSE, reinterpret_cast<float *>(&model));
         
@@ -622,6 +757,7 @@ int main() try
         glUniform3fv(floor_sun_direction_location, 1, reinterpret_cast<float *>(&light_direction));
         glUniform3fv(floor_camera_position_location, 1, reinterpret_cast<float *>(&camera_position));
         glUniform1i(floor_texture_location, 0);
+        glUniform1i(floor_caustics_texture_location, 2);
         glUniform3f(floor_ambient_color_location, 0.2, 0.2, 0.2);
         glUniform3f(floor_sun_color_location, sun_color.x, sun_color.y, sun_color.z);
         glUniform1f(floor_glossiness_location, 3.0);
@@ -630,6 +766,9 @@ int main() try
         glBindVertexArray(floor_vao);
         glBindBuffer(GL_ARRAY_BUFFER, floor_vbo);
         glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, caustics_tex);
 
         glDrawArrays(GL_TRIANGLES, 0, 6);
 
@@ -649,6 +788,7 @@ int main() try
         glUniform1f(water_roughness_location, 0.05);
         glUniform1i(water_env_texture_location, 1);
         glUniform1i(water_floor_texture_location, 0);
+        glUniform1i(water_caustics_texture_location, 2);
         glUniform1f(water_floor_width_location, floor_width);
         glUniform1f(water_floor_height_location, floor_height);
 
@@ -658,6 +798,8 @@ int main() try
         glBindTexture(GL_TEXTURE_2D, tex);
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_CUBE_MAP, env_tex);
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, caustics_tex);
 
         glDrawArrays(GL_TRIANGLES, 0, water_points.size());
 
